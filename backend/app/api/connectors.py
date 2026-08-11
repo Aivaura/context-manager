@@ -59,11 +59,10 @@ class ConnectorStatusResponse(BaseModel):
 
 def _get_redis():
     import redis as redis_lib
-    return redis_lib.from_url(
-        settings.redis_url,
-        decode_responses=True,
-        ssl_cert_reqs=None if settings.redis_url.startswith("rediss://") else None,
-    )
+    kwargs = {"decode_responses": True}
+    if settings.redis_url.startswith("rediss://"):
+        kwargs["ssl_cert_reqs"] = "none"
+    return redis_lib.from_url(settings.redis_url, **kwargs)
 
 
 @router.get("")
