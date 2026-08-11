@@ -11,9 +11,10 @@ settings = get_settings()
 
 def _get_qdrant():
     from qdrant_client import QdrantClient
+    from app.main import _sanitize_ascii
     return QdrantClient(
         url=settings.qdrant_url,
-        api_key=settings.qdrant_api_key or None,
+        api_key=_sanitize_ascii(settings.qdrant_api_key),
     )
 
 
