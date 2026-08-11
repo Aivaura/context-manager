@@ -3,7 +3,7 @@ name = "context-store-backend"
 version = "0.1.0"
 description = "Aivaura Context Store MVP Backend"
 authors = ["Aivaura"]
-python = ">=3.10,<3.12"
+package-mode = false
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.12"
@@ -46,7 +46,7 @@ openai-whisper = {version = "*", optional = true}
 [tool.poetry.extras]
 whisper = ["openai-whisper"]
 
-[tool.poetry.dev-dependencies]
+[tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
 pytest-asyncio = "^0.23"
 httpx = "^0.27.0"
