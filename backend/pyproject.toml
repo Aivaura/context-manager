@@ -17,7 +17,6 @@ asyncpg = "^0.29.0"
 celery = {extras = ["redis"], version = "^5.4.0"}
 redis = "^5.0.0"
 python-jose = {extras = ["cryptography"], version = "^3.3.0"}
-passlib = {extras = ["bcrypt"], version = "^1.7.0"}
 cryptography = "^43.0"
 slowapi = "^0.1.9"
 llama-index-core = ">=0.10.0"

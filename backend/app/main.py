@@ -25,50 +25,83 @@ def _rate_key(request: Request) -> str:
 limiter = Limiter(key_func=_rate_key)
 
 
+def _sanitize_ascii(value: str) -> str | None:
+    """Strip non-ASCII characters from a string (e.g. bullet-masked copy-pastes)."""
+    cleaned = value.encode("ascii", errors="ignore").decode("ascii").strip()
+    if not cleaned:
+        return None
+    if cleaned != value.strip():
+        logger.warning(
+            "Non-ASCII characters removed from QDRANT_API_KEY. "
+            "The value in .env appears to have been copy-pasted from a masked UI — "
+            "please replace it with the real key."
+        )
+    return cleaned
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from qdrant_client import QdrantClient
     from qdrant_client.models import Distance, VectorParams
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # ── Database ──────────────────────────────────────────────────────────────
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as exc:
+        logger.warning(f"Database table creation failed (non-fatal): {exc}")
 
-    qdrant_client = QdrantClient(
-        url=settings.qdrant_url,
-        api_key=settings.qdrant_api_key or None,
-    )
-    app.state.qdrant_client = qdrant_client
+    # ── Qdrant ────────────────────────────────────────────────────────────────
+    app.state.qdrant_client = None
+    app.state.search_engine = None
 
-    collections = [c.name for c in qdrant_client.get_collections().collections]
-    if settings.qdrant_collection not in collections:
-        qdrant_client.create_collection(
-            collection_name=settings.qdrant_collection,
-            vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+    try:
+        api_key = _sanitize_ascii(settings.qdrant_api_key)
+        qdrant_client = QdrantClient(
+            url=settings.qdrant_url,
+            api_key=api_key,
         )
-        logger.info(f"Created Qdrant collection: {settings.qdrant_collection}")
-
-    from app.retrieval.hybrid_search import HybridSearchEngine
-    search_engine = HybridSearchEngine(qdrant_client, settings.qdrant_collection)
-    app.state.search_engine = search_engine
-
-    await _refresh_bm25(search_engine)
-
-    from app.api.auth import hash_password
-    from app.database import AsyncSessionLocal
-    from app.models.user import User
-    from sqlalchemy import select
-
-    async with AsyncSessionLocal() as db:
-        admin = await db.scalar(select(User).where(User.email == "admin@aivaura.com"))
-        if not admin:
-            admin = User(
-                email="admin@aivaura.com",
-                hashed_password=hash_password("changeme123"),
-                role="admin",
+        collections = [c.name for c in qdrant_client.get_collections().collections]
+        if settings.qdrant_collection not in collections:
+            qdrant_client.create_collection(
+                collection_name=settings.qdrant_collection,
+                vectors_config=VectorParams(size=768, distance=Distance.COSINE),
             )
-            db.add(admin)
-            await db.commit()
-            logger.info("Created default admin user: admin@aivaura.com / changeme123")
+            logger.info(f"Created Qdrant collection: {settings.qdrant_collection}")
+
+        app.state.qdrant_client = qdrant_client
+
+        from app.retrieval.hybrid_search import HybridSearchEngine
+        search_engine = HybridSearchEngine(qdrant_client, settings.qdrant_collection)
+        app.state.search_engine = search_engine
+
+        await _refresh_bm25(search_engine)
+    except Exception as exc:
+        logger.warning(
+            f"Qdrant initialization failed — vector search unavailable: {exc}. "
+            "Check QDRANT_URL and QDRANT_API_KEY in .env."
+        )
+
+    # ── Default admin user ────────────────────────────────────────────────────
+    try:
+        from app.api.auth import hash_password
+        from app.database import AsyncSessionLocal
+        from app.models.user import User
+        from sqlalchemy import select
+
+        async with AsyncSessionLocal() as db:
+            admin = await db.scalar(select(User).where(User.email == "admin@aivaura.com"))
+            if not admin:
+                admin = User(
+                    email="admin@aivaura.com",
+                    hashed_password=hash_password("changeme123"),
+                    role="admin",
+                )
+                db.add(admin)
+                await db.commit()
+                logger.info("Created default admin user: admin@aivaura.com / changeme123")
+    except Exception as exc:
+        logger.warning(f"Admin user seed failed (non-fatal): {exc}")
 
     logger.info("Context Store API started")
     yield
