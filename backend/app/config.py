@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.2:3b"
     ollama_embed_model: str = "nomic-embed-text"
+    embed_provider: str = "ollama"  # "ollama" or "jina"
+    jina_api_key: str = ""
+    jina_embed_model: str = "jina-embeddings-v2-base-en"
     anthropic_api_key: str = ""
     openai_api_key: str = ""
 

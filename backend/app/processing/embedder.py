@@ -1,5 +1,3 @@
-from functools import lru_cache
-
 import httpx
 
 from app.config import get_settings
@@ -7,19 +5,34 @@ from app.config import get_settings
 
 async def embed_text(text: str) -> list[float]:
     settings = get_settings()
+    if settings.embed_provider == "jina":
+        return await _embed_jina(text, settings)
+    return await _embed_ollama(text, settings)
+
+
+async def embed_batch(texts: list[str]) -> list[list[float]]:
+    return [await embed_text(t) for t in texts]
+
+
+async def _embed_ollama(text: str, settings) -> list[float]:
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             f"{settings.ollama_base_url}/api/embeddings",
             json={"model": settings.ollama_embed_model, "prompt": text},
         )
         response.raise_for_status()
-        data = response.json()
-        return data["embedding"]
+        return response.json()["embedding"]
 
 
-async def embed_batch(texts: list[str]) -> list[list[float]]:
-    results = []
-    for text in texts:
-        embedding = await embed_text(text)
-        results.append(embedding)
-    return results
+async def _embed_jina(text: str, settings) -> list[float]:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(
+            "https://api.jina.ai/v1/embeddings",
+            headers={
+                "Authorization": f"Bearer {settings.jina_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"model": settings.jina_embed_model, "input": [text]},
+        )
+        response.raise_for_status()
+        return response.json()["data"][0]["embedding"]
