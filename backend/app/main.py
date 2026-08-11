@@ -9,8 +9,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from app.config import get_settings
-from app.database import engine
-from app.models import Base
+from app.database import engine, Base
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -28,7 +27,6 @@ limiter = Limiter(key_func=_rate_key)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from app.database import Base
     from qdrant_client import QdrantClient
     from qdrant_client.models import Distance, VectorParams
 
