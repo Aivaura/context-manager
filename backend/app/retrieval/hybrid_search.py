@@ -46,13 +46,13 @@ class HybridSearchEngine:
         return merged[:30]
 
     async def _dense_search(self, embedding: list[float], top_k: int) -> list[SearchResult]:
-        hits = self.qdrant_client.search(
+        response = self.qdrant_client.query_points(
             collection_name=self.collection_name,
-            query_vector=embedding,
+            query=embedding,
             limit=top_k,
         )
         results = []
-        for hit in hits:
+        for hit in response.points:
             p = hit.payload or {}
             results.append(
                 SearchResult(
