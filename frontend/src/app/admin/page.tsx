@@ -19,12 +19,13 @@ function timeAgo(dateStr: string): string {
 export default function AdminPage() {
   const router = useRouter();
   const token = useAuthStore((s) => s.token);
+  const hasHydrated = useAuthStore((s) => s._hasHydrated);
   const [reindexing, setReindexing] = useState(false);
   const [reindexMsg, setReindexMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token) router.push("/login");
-  }, [token, router]);
+    if (hasHydrated && !token) router.push("/login");
+  }, [hasHydrated, token, router]);
 
   const { data: stats } = useQuery({
     queryKey: ["stats"],
@@ -51,7 +52,7 @@ export default function AdminPage() {
     }
   };
 
-  if (!token) return null;
+  if (!hasHydrated || !token) return null;
 
   return (
     <div className="min-h-screen bg-gray-50">

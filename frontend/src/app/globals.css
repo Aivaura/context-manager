@@ -1,13 +1,78 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  :root {
-    --background: 255 255 255;
-    --foreground: 15 23 42;
-  }
   body {
-    @apply bg-gray-50 text-slate-900 antialiased;
+    font-family: 'Inter', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    @apply bg-[#090D16] text-slate-100 antialiased selection:bg-indigo-600/30 selection:text-indigo-200;
   }
 }
+
+/* Custom Minimalist Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.4);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(51, 65, 85, 0.5);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(99, 102, 241, 0.5);
+}
+
+/* Enterprise Surface Utilities */
+.surface-main {
+  background-color: #090D16;
+}
+
+.surface-sidebar {
+  background-color: #0D1322;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.surface-card {
+  background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.surface-card-hover {
+  transition: all 0.2s ease-in-out;
+}
+.surface-card-hover:hover {
+  border-color: rgba(99, 102, 241, 0.3);
+  background: rgba(20, 30, 55, 0.75);
+}
+
+.subtle-border {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.subtle-divider {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+/* Keyframes & Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+

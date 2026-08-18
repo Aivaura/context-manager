@@ -1,17 +1,39 @@
 import io
+import logging
+import time
 from datetime import datetime
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from app.connectors.base import BaseConnector, ConnectorStatus
 from app.processing.pipeline import RawDocument
+
+logger = logging.getLogger(__name__)
 
 SCOPES_SHEETS = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
     "https://www.googleapis.com/auth/drive.readonly",
 ]
 MAX_ROWS = 10_000
+
+
+def _execute_with_retry(request, max_retries=5, initial_delay=2.0):
+    """Execute Google API request with exponential backoff on HTTP 429 / 5xx."""
+    delay = initial_delay
+    for attempt in range(max_retries):
+        try:
+            return request.execute(num_retries=3)
+        except HttpError as e:
+            if e.resp.status in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+                logger.warning(
+                    f"Google API rate limit / error (HTTP {e.resp.status}). Retrying in {delay:.1f}s... (attempt {attempt + 1}/{max_retries})"
+                )
+                time.sleep(delay)
+                delay *= 2
+            else:
+                raise
 
 
 class SheetsConnector(BaseConnector):
@@ -32,8 +54,12 @@ class SheetsConnector(BaseConnector):
         return sheets_svc, drive_svc
 
     async def fetch_documents(self, connector_record, since: datetime | None = None) -> list[RawDocument]:
+        import asyncio
         from app.connectors.utils import decrypt_token
         token_dict = decrypt_token(connector_record.oauth_token_encrypted)
+        return await asyncio.to_thread(self._fetch_documents_sync, token_dict, since)
+
+    def _fetch_documents_sync(self, token_dict: dict, since: datetime | None) -> list[RawDocument]:
         sheets_svc, drive_svc = self._build_services(token_dict)
 
         query = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
@@ -41,33 +67,50 @@ class SheetsConnector(BaseConnector):
             since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
             query += f" and modifiedTime > '{since_str}'"
 
-        response = drive_svc.files().list(
+        request = drive_svc.files().list(
             q=query,
             fields="files(id, name, modifiedTime, owners, webViewLink)",
             pageSize=100,
-        ).execute()
+        )
+        response = _execute_with_retry(request)
 
         results = []
-        for sheet_file in response.get("files", []):
-            docs = self._process_sheet(sheets_svc, sheet_file)
-            results.extend(docs)
+        files = response.get("files", [])
+        for index, sheet_file in enumerate(files):
+            # Pace requests (1 second delay per spreadsheet) to comfortably stay within 60 req/min limit
+            if index > 0:
+                time.sleep(1.0)
+
+            try:
+                docs = self._process_sheet(sheets_svc, sheet_file)
+                results.extend(docs)
+            except Exception as e:
+                logger.error(f"Failed to process Google Sheet '{sheet_file.get('name', sheet_file.get('id'))}': {e}")
+                time.sleep(2.0)
 
         return results
 
     def _process_sheet(self, sheets_svc, sheet_file: dict) -> list[RawDocument]:
-        spreadsheet = sheets_svc.spreadsheets().get(
-            spreadsheetId=sheet_file["id"]
-        ).execute()
+        req = sheets_svc.spreadsheets().get(spreadsheetId=sheet_file["id"])
+        spreadsheet = _execute_with_retry(req)
 
         results = []
         for sheet in spreadsheet.get("sheets", []):
             props = sheet.get("properties", {})
             tab_name = props.get("title", "Sheet")
 
-            values_response = sheets_svc.spreadsheets().values().get(
+            # Small delay per tab call to avoid spiking read rate limits
+            time.sleep(0.5)
+
+            val_req = sheets_svc.spreadsheets().values().get(
                 spreadsheetId=sheet_file["id"],
                 range=tab_name,
-            ).execute()
+            )
+            try:
+                values_response = _execute_with_retry(val_req)
+            except Exception as e:
+                logger.error(f"Failed to fetch values for tab '{tab_name}' in sheet '{sheet_file.get('name')}': {e}")
+                continue
 
             rows = values_response.get("values", [])
             if not rows:

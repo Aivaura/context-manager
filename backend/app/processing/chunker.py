@@ -49,6 +49,8 @@ def _chunk_standard(text: str) -> list[Chunk]:
 
 
 def _chunk_spreadsheet(text: str) -> list[Chunk]:
+    if not text or not text.strip():
+        return []
     lines = text.strip().split("\n")
     if not lines:
         return []
@@ -60,10 +62,12 @@ def _chunk_spreadsheet(text: str) -> list[Chunk]:
     batch_size = 20
     for i in range(0, max(len(data_lines), 1), batch_size):
         batch = data_lines[i : i + batch_size]
-        chunk_text = header + "\n" + "\n".join(batch) if batch else header
+        chunk_text = (header + "\n" + "\n".join(batch) if batch else header).strip()
+        if not chunk_text:
+            continue
         chunks.append(
             Chunk(
-                text=chunk_text.strip(),
+                text=chunk_text,
                 chunk_index=len(chunks),
                 token_count=len(chunk_text.split()),
             )

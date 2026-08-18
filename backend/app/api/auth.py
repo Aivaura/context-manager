@@ -83,10 +83,21 @@ async def get_current_user(
     return user
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.get("/login")
+async def login_get_info():
+    return {
+        "data": None,
+        "message": "Auth endpoint is active. Use POST /api/v1/auth/login with JSON body {'email': '...', 'password': '...'} to authenticate.",
+        "error": None,
+    }
+
+
+@router.post("/login")
 async def login(body: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import func
+    clean_email = str(body.email).strip().lower()
     user = await db.scalar(
-        select(User).where(User.email == body.email, User.is_active == True)
+        select(User).where(func.lower(User.email) == clean_email, User.is_active == True)
     )
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -103,7 +114,18 @@ async def login(body: LoginRequest, response: Response, db: AsyncSession = Depen
         max_age=settings.refresh_token_expire_days * 86400,
         path="/api/v1/auth",
     )
-    return TokenResponse(access_token=access_token)
+    return {
+        "data": {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": str(user.id),
+                "email": user.email,
+                "role": user.role,
+            },
+        },
+        "error": None,
+    }
 
 
 @router.post("/logout")
@@ -112,7 +134,7 @@ async def logout(response: Response):
     return {"data": "Logged out", "error": None}
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post("/refresh")
 async def refresh(
     response: Response,
     db: AsyncSession = Depends(get_db),
@@ -134,9 +156,23 @@ async def refresh(
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
 
-    return TokenResponse(access_token=create_access_token(str(user.id)))
+    return {
+        "data": {
+            "access_token": create_access_token(str(user.id)),
+            "token_type": "bearer",
+        },
+        "error": None,
+    }
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get("/me")
 async def get_me(current_user: User = Depends(get_current_user)):
-    return UserResponse(id=str(current_user.id), email=current_user.email, role=current_user.role)
+    return {
+        "data": {
+            "id": str(current_user.id),
+            "email": current_user.email,
+            "role": current_user.role,
+        },
+        "error": None,
+    }
+

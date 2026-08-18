@@ -46,17 +46,46 @@ def _extract_date_filter(query: str) -> tuple[str, dict | None]:
     return query, filters
 
 
+def _extract_source_intent(query: str) -> str | None:
+    q = query.lower()
+    if re.search(r"\b(email|emails|mail|mails|inbox|gmail)\b", q):
+        return "gmail"
+    if re.search(r"\b(sheet|sheets|excel|spreadsheet|spreadsheets|row|tab|csv)\b", q):
+        return "sheets"
+    if re.search(r"\b(drive|doc|docs|google doc|pdf|file|files)\b", q):
+        return "google_drive"
+    if re.search(r"\b(whatsapp|chat|chats|voice note)\b", q):
+        return "whatsapp"
+    if re.search(r"\b(outlook)\b", q):
+        return "outlook"
+    return None
+
+
+def _extract_query_filters(query: str, explicit_source_type: str | None = None) -> tuple[str, dict]:
+    filters = {}
+    clean_question, date_filter = _extract_date_filter(query)
+    if date_filter:
+        filters.update(date_filter)
+
+    stype = explicit_source_type or _extract_source_intent(query)
+    if stype:
+        filters["source_type"] = stype
+
+    return clean_question, filters
+
+
 async def run_query(
     question: str,
     search_engine: HybridSearchEngine,
     top_k: int = 5,
+    source_type: str | None = None,
     db: AsyncSession | None = None,
 ) -> QueryResponse:
     import uuid
 
-    clean_question, date_filter = _extract_date_filter(question)
+    clean_question, filters = _extract_query_filters(question, explicit_source_type=source_type)
 
-    candidates = await search_engine.search(clean_question, top_k=20, filters=date_filter)
+    candidates = await search_engine.search(clean_question, top_k=25, filters=filters)
 
     if not candidates:
         return QueryResponse(

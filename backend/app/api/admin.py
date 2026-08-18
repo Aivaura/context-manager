@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,11 +48,20 @@ async def get_audit_logs(
 
 @router.get("/stats")
 async def get_stats(
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    from app.models.chunk import Chunk
+    from app.config import get_settings
+
+    settings = get_settings()
+
     total_docs = await db.scalar(
         select(func.count()).select_from(Document).join(Connector).where(Connector.user_id == current_user.id)
+    )
+    total_chunks = await db.scalar(
+        select(func.count()).select_from(Chunk).join(Document).join(Connector).where(Connector.user_id == current_user.id)
     )
     total_queries = await db.scalar(
         select(func.count()).select_from(AuditLog).where(AuditLog.user_id == current_user.id)
@@ -64,14 +73,22 @@ async def get_stats(
         )
     )
 
+    qdrant_client = getattr(request.app.state, "qdrant_client", None)
+    qdrant_status = "active" if qdrant_client is not None else "degraded"
+
     return {
         "data": {
             "total_documents": total_docs or 0,
+            "total_chunks": total_chunks or 0,
             "total_queries": total_queries or 0,
             "active_connectors": active_connectors or 0,
+            "qdrant_status": qdrant_status,
+            "llm_provider": settings.llm_provider,
+            "system_status": "healthy",
         },
         "error": None,
     }
+
 
 
 @router.post("/reindex")

@@ -9,6 +9,12 @@ from googleapiclient.http import MediaIoBaseDownload
 from app.connectors.base import BaseConnector, ConnectorStatus
 from app.processing.pipeline import RawDocument
 
+import logging
+import time
+from googleapiclient.errors import HttpError
+
+logger = logging.getLogger(__name__)
+
 SCOPES_DRIVE = ["https://www.googleapis.com/auth/drive.readonly"]
 SKIP_MIME = {
     "application/vnd.google-apps.folder",
@@ -17,6 +23,22 @@ SKIP_MIME = {
     "image/",
 }
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+
+def _execute_with_retry(request, max_retries=5, initial_delay=2.0):
+    delay = initial_delay
+    for attempt in range(max_retries):
+        try:
+            return request.execute(num_retries=3)
+        except HttpError as e:
+            if e.resp.status in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+                logger.warning(
+                    f"Google Drive API rate limit / error (HTTP {e.resp.status}). Retrying in {delay:.1f}s... (attempt {attempt + 1}/{max_retries})"
+                )
+                time.sleep(delay)
+                delay *= 2
+            else:
+                raise
 
 
 class GoogleDriveConnector(BaseConnector):
@@ -35,8 +57,12 @@ class GoogleDriveConnector(BaseConnector):
         return build("drive", "v3", credentials=creds)
 
     async def fetch_documents(self, connector_record, since: datetime | None = None) -> list[RawDocument]:
+        import asyncio
         from app.connectors.utils import decrypt_token
         token_dict = decrypt_token(connector_record.oauth_token_encrypted)
+        return await asyncio.to_thread(self._fetch_documents_sync, token_dict, since)
+
+    def _fetch_documents_sync(self, token_dict: dict, since: datetime | None) -> list[RawDocument]:
         service = self._build_service(token_dict)
 
         query = "trashed=false and mimeType != 'application/vnd.google-apps.folder'"
@@ -56,8 +82,13 @@ class GoogleDriveConnector(BaseConnector):
             if page_token:
                 kwargs["pageToken"] = page_token
 
-            response = service.files().list(**kwargs).execute()
-            files = response.get("files", [])
+            list_req = service.files().list(**kwargs)
+            try:
+                response = _execute_with_retry(list_req)
+                files = response.get("files", [])
+            except Exception as e:
+                logger.error(f"Failed to list Google Drive files: {e}")
+                break
 
             for file in files:
                 size = int(file.get("size", 0) or 0)

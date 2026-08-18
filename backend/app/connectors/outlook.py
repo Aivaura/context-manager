@@ -72,8 +72,6 @@ class OutlookConnector(BaseConnector):
                     )
 
                 url = data.get("@odata.nextLink")
-                if len(results) >= 500:
-                    break
 
         return results
 

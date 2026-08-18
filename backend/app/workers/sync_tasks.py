@@ -49,12 +49,37 @@ async def run_sync_for_connector(connector_id: str, full_sync: bool = False):
             docs = await connector_impl.fetch_documents(connector, since=since)
             qdrant_client = _get_qdrant()
 
+            from app.api.connectors import _get_redis
+            r_client = None
+            try:
+                r_client = _get_redis()
+            except Exception:
+                pass
+
             for raw_doc in docs:
+                if r_client and r_client.get(f"cancel_sync:{connector_id}"):
+                    logger.info(f"Sync cancelled by user for connector {connector_id}")
+                    r_client.delete(f"cancel_sync:{connector_id}")
+                    await db.execute(
+                        update(Connector)
+                        .where(Connector.id == connector.id)
+                        .values(status="connected", error_message="Sync cancelled by user")
+                    )
+                    await db.commit()
+                    return
+
                 try:
                     await process_document(raw_doc, connector, db, qdrant_client)
                 except Exception as e:
                     logger.error(f"Error processing document {raw_doc.source_id}: {e}")
 
+            from app.models.document import Document
+            from sqlalchemy import func
+            true_count = await db.scalar(
+                select(func.count()).select_from(Document).where(
+                    Document.connector_id == connector.id
+                )
+            )
             await db.execute(
                 update(Connector)
                 .where(Connector.id == connector.id)
@@ -62,6 +87,7 @@ async def run_sync_for_connector(connector_id: str, full_sync: bool = False):
                     status="connected",
                     last_sync_at=datetime.utcnow(),
                     error_message=None,
+                    document_count=true_count or 0,
                 )
             )
             await db.commit()

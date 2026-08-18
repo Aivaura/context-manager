@@ -69,13 +69,24 @@ async def lifespan(app: FastAPI):
             )
             logger.info(f"Created Qdrant collection: {settings.qdrant_collection}")
 
+        try:
+            from qdrant_client.models import PayloadSchemaType
+            qdrant_client.create_payload_index(
+                collection_name=settings.qdrant_collection,
+                field_name="source_type",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+        except Exception:
+            pass
+
         app.state.qdrant_client = qdrant_client
 
         from app.retrieval.hybrid_search import HybridSearchEngine
         search_engine = HybridSearchEngine(qdrant_client, settings.qdrant_collection)
         app.state.search_engine = search_engine
 
-        await _refresh_bm25(search_engine)
+        import asyncio
+        asyncio.create_task(_refresh_bm25(search_engine))
     except Exception as exc:
         logger.warning(
             f"Qdrant initialization failed — vector search unavailable: {exc}. "
@@ -185,11 +196,14 @@ async def health():
     return {"status": "ok", "service": "context-store"}
 
 
-from app.api import auth, connectors, query, documents, admin, webhooks
+from app.api import admin, auth, connectors, documents, graph, notes, query, webhooks
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(connectors.router, prefix="/api/v1")
 app.include_router(query.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
+app.include_router(notes.router, prefix="/api/v1")
+app.include_router(graph.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(webhooks.router, prefix="/api/v1")
+

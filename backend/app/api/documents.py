@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 
 from app.api.auth import get_current_user
 from app.config import get_settings
@@ -51,6 +53,8 @@ async def list_documents(
     }
 
 
+from sqlalchemy.orm import selectinload
+
 @router.get("/{doc_id}")
 async def get_document(
     doc_id: str,
@@ -65,14 +69,15 @@ async def get_document(
 
     doc = await db.scalar(
         select(Document)
+        .options(selectinload(Document.chunks))
         .join(Connector)
         .where(Document.id == uid, Connector.user_id == current_user.id)
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    await db.refresh(doc, attribute_names=["chunks"])
-    full_text = " ".join(c.text for c in sorted(doc.chunks, key=lambda x: x.chunk_index))
+    sorted_chunks = sorted(doc.chunks, key=lambda x: x.chunk_index)
+    full_text = "\n\n".join(c.text for c in sorted_chunks if c.text)
 
     return {
         "data": {
@@ -80,6 +85,7 @@ async def get_document(
             "title": doc.title,
             "source_url": doc.source_url,
             "author": doc.author,
+            "source_id": doc.source_id,
             "text": full_text,
             "chunk_count": doc.chunk_count,
             "indexed_at": doc.indexed_at.isoformat() if doc.indexed_at else None,
@@ -110,7 +116,7 @@ async def delete_document(
         raise HTTPException(status_code=404, detail="Document not found")
 
     await db.refresh(doc, attribute_names=["chunks"])
-    qdrant_client = request.app.state.qdrant_client
+    qdrant_client = getattr(request.app.state, "qdrant_client", None)
     if qdrant_client:
         qdrant_ids = [c.qdrant_id for c in doc.chunks if c.qdrant_id]
         if qdrant_ids:
@@ -125,6 +131,51 @@ async def delete_document(
     await db.delete(doc)
     await db.commit()
     return {"data": "Document deleted", "error": None}
+
+
+@router.post("/{doc_id}/reindex")
+async def reindex_document(
+    doc_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import uuid as _uuid
+    try:
+        uid = _uuid.UUID(doc_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid document ID")
+
+    doc = await db.scalar(
+        select(Document)
+        .options(selectinload(Document.chunks))
+        .join(Connector)
+        .where(Document.id == uid, Connector.user_id == current_user.id)
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    sorted_chunks = sorted(doc.chunks, key=lambda x: x.chunk_index)
+    full_text = "\n\n".join(c.text for c in sorted_chunks if c.text)
+
+    if not full_text:
+        return {"data": "Document contains no text payload to re-index", "error": None}
+
+    connector = await db.get(Connector, doc.connector_id)
+    qdrant_client = request.app.state.qdrant_client
+
+    from app.processing.pipeline import RawDocument, process_document
+    raw_doc = RawDocument(
+        source_id=doc.source_id,
+        title=doc.title,
+        text=full_text,
+        author=doc.author,
+        source_url=doc.source_url,
+    )
+    await process_document(raw_doc, connector, db, qdrant_client)
+
+    return {"data": "Document re-indexed successfully", "error": None}
+
 
 
 @router.post("/upload")
@@ -170,3 +221,181 @@ async def upload_excel(
             pass
 
     return {"data": f"Uploaded and indexed {processed} sheet(s) from {filename}", "error": None}
+
+
+class DocumentUpdate(BaseModel):
+    title: str | None = None
+    author: str | None = None
+    source_url: str | None = None
+
+
+class ChunkUpdate(BaseModel):
+    text: str
+
+
+@router.put("/{doc_id}")
+async def update_document(
+    doc_id: str,
+    payload: DocumentUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import uuid as _uuid
+    try:
+        uid = _uuid.UUID(doc_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid document ID")
+
+    doc = await db.scalar(
+        select(Document)
+        .join(Connector)
+        .where(Document.id == uid, Connector.user_id == current_user.id)
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if payload.title is not None:
+        doc.title = payload.title
+    if payload.author is not None:
+        doc.author = payload.author
+    if payload.source_url is not None:
+        doc.source_url = payload.source_url
+
+    await db.commit()
+    return {"data": "Document updated successfully", "error": None}
+
+
+@router.get("/{doc_id}/chunks")
+async def list_document_chunks(
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import uuid as _uuid
+    try:
+        uid = _uuid.UUID(doc_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid document ID")
+
+    doc = await db.scalar(
+        select(Document)
+        .options(selectinload(Document.chunks))
+        .join(Connector)
+        .where(Document.id == uid, Connector.user_id == current_user.id)
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    chunks = sorted(doc.chunks, key=lambda c: c.chunk_index)
+    return {
+        "data": [
+            {
+                "id": str(c.id),
+                "chunk_index": c.chunk_index,
+                "text": c.text,
+                "token_count": getattr(c, "token_count", 0),
+                "qdrant_id": c.qdrant_id,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+            }
+            for c in chunks
+        ],
+        "error": None,
+    }
+
+
+@router.put("/{doc_id}/chunks/{chunk_id}")
+async def update_chunk(
+    doc_id: str,
+    chunk_id: str,
+    payload: ChunkUpdate,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import uuid as _uuid
+    from app.models.chunk import Chunk
+    try:
+        duid = _uuid.UUID(doc_id)
+        cuid = _uuid.UUID(chunk_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+
+    chunk = await db.scalar(
+        select(Chunk)
+        .join(Document)
+        .join(Connector)
+        .where(Chunk.id == cuid, Document.id == duid, Connector.user_id == current_user.id)
+    )
+    if not chunk:
+        raise HTTPException(status_code=404, detail="Chunk not found")
+
+    chunk.text = payload.text.strip()
+    await db.commit()
+
+    qdrant_client = request.app.state.qdrant_client
+    if qdrant_client and chunk.qdrant_id and chunk.text:
+        try:
+            from app.processing.embedder import embed_texts
+            from qdrant_client.models import PointStruct
+            vector = await embed_texts([chunk.text])
+            if vector:
+                doc = await db.get(Document, duid)
+                qdrant_client.upsert(
+                    collection_name=settings.qdrant_collection,
+                    points=[
+                        PointStruct(
+                            id=chunk.qdrant_id,
+                            vector=vector[0],
+                            payload={
+                                "text": chunk.text,
+                                "document_id": str(duid),
+                                "document_title": doc.title if doc else "Document",
+                            },
+                        )
+                    ],
+                )
+        except Exception:
+            pass
+
+    return {"data": "Chunk updated and vector re-embedded", "error": None}
+
+
+@router.delete("/{doc_id}/chunks/{chunk_id}")
+async def delete_chunk(
+    doc_id: str,
+    chunk_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import uuid as _uuid
+    from app.models.chunk import Chunk
+    try:
+        duid = _uuid.UUID(doc_id)
+        cuid = _uuid.UUID(chunk_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+
+    chunk = await db.scalar(
+        select(Chunk)
+        .join(Document)
+        .join(Connector)
+        .where(Chunk.id == cuid, Document.id == duid, Connector.user_id == current_user.id)
+    )
+    if not chunk:
+        raise HTTPException(status_code=404, detail="Chunk not found")
+
+    qdrant_client = request.app.state.qdrant_client
+    if qdrant_client and chunk.qdrant_id:
+        try:
+            qdrant_client.delete(
+                collection_name=settings.qdrant_collection,
+                points_selector=[chunk.qdrant_id],
+            )
+        except Exception:
+            pass
+
+    await db.delete(chunk)
+    await db.commit()
+    return {"data": "Chunk deleted", "error": None}
+

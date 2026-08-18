@@ -3,7 +3,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -35,10 +35,12 @@ async def process_document(
     db: AsyncSession,
     qdrant_client,
 ) -> Document:
-    from app.models.document import Document
+    from sqlalchemy.orm import selectinload
 
     existing = await db.scalar(
-        select(Document).where(
+        select(Document)
+        .options(selectinload(Document.chunks))
+        .where(
             Document.connector_id == connector.id,
             Document.source_id == raw.source_id,
         )
@@ -107,24 +109,16 @@ async def process_document(
             )
         )
 
-    if points:
-        qdrant_client.upsert(
-            collection_name=settings.qdrant_collection,
-            points=points,
-        )
+    if points and qdrant_client:
+        try:
+            qdrant_client.upsert(
+                collection_name=settings.qdrant_collection,
+                points=points,
+            )
+        except Exception:
+            pass
 
     db.add_all(chunk_models)
-
-    await db.execute(
-        update(Connector)
-        .where(Connector.id == connector.id)
-        .values(
-            document_count=Connector.document_count + 1,
-            last_sync_at=datetime.utcnow(),
-            status="connected",
-            error_message=None,
-        )
-    )
 
     await db.commit()
     return doc

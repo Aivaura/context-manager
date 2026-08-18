@@ -17,13 +17,14 @@ interface QAPair {
 export default function AskPage() {
   const router = useRouter();
   const token = useAuthStore((s) => s.token);
+  const hasHydrated = useAuthStore((s) => s._hasHydrated);
   const [history, setHistory] = useState<QAPair[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token) router.push("/login");
-  }, [token, router]);
+    if (hasHydrated && !token) router.push("/login");
+  }, [hasHydrated, token, router]);
 
   const handleQuestion = async (question: string) => {
     setLoading(true);
@@ -38,7 +39,7 @@ export default function AskPage() {
     }
   };
 
-  if (!token) return null;
+  if (!hasHydrated || !token) return null;
 
   return (
     <div className="min-h-screen bg-gray-50">

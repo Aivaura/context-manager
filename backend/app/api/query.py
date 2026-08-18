@@ -17,6 +17,7 @@ router = APIRouter(prefix="/query", tags=["query"])
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     top_k: int = Field(default=5, ge=1, le=20)
+    source_type: str | None = Field(default=None)
 
 
 class SourceResponse(BaseModel):
@@ -50,6 +51,7 @@ async def query(
         question=body.question,
         search_engine=search_engine,
         top_k=body.top_k,
+        source_type=body.source_type,
         db=db,
     )
 

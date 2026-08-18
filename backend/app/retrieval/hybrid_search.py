@@ -39,18 +39,35 @@ class HybridSearchEngine:
     async def search(self, query: str, top_k: int = 5, filters: dict | None = None) -> list[SearchResult]:
         query_embedding = await embed_text(query)
 
-        dense_results = await self._dense_search(query_embedding, top_k=20)
-        sparse_results = self._sparse_search(query, top_k=20)
+        dense_results = await self._dense_search(query_embedding, top_k=25, filters=filters)
+        sparse_results = self._sparse_search(query, top_k=25, filters=filters)
 
         merged = self._reciprocal_rank_fusion(dense_results, sparse_results)
         return merged[:30]
 
-    async def _dense_search(self, embedding: list[float], top_k: int) -> list[SearchResult]:
-        response = self.qdrant_client.query_points(
-            collection_name=self.collection_name,
-            query=embedding,
-            limit=top_k,
-        )
+    async def _dense_search(self, embedding: list[float], top_k: int, filters: dict | None = None) -> list[SearchResult]:
+        qdrant_filter = None
+        if filters and filters.get("source_type"):
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
+            stype = filters["source_type"]
+            qdrant_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="source_type",
+                        match=MatchValue(value=stype),
+                    )
+                ]
+            )
+
+        kwargs = {
+            "collection_name": self.collection_name,
+            "query": embedding,
+            "limit": top_k,
+        }
+        if qdrant_filter:
+            kwargs["query_filter"] = qdrant_filter
+
+        response = self.qdrant_client.query_points(**kwargs)
         results = []
         for hit in response.points:
             p = hit.payload or {}
@@ -71,18 +88,22 @@ class HybridSearchEngine:
             )
         return results
 
-    def _sparse_search(self, query: str, top_k: int) -> list[SearchResult]:
+    def _sparse_search(self, query: str, top_k: int, filters: dict | None = None) -> list[SearchResult]:
         if self._bm25_index is None or not self._bm25_docs:
             return []
 
         tokens = query.lower().split()
         scores = self._bm25_index.get_scores(tokens)
 
-        ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[:top_k]
+        target_source = filters.get("source_type") if filters else None
+
+        ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
         results = []
         for idx, score in ranked:
             if score > 0 and idx < len(self._bm25_docs):
                 doc = self._bm25_docs[idx]
+                if target_source and doc.get("source_type") != target_source:
+                    continue
                 results.append(
                     SearchResult(
                         chunk_id=doc.get("chunk_id", ""),
@@ -98,6 +119,8 @@ class HybridSearchEngine:
                         score=float(score),
                     )
                 )
+                if len(results) >= top_k:
+                    break
         return results
 
     @staticmethod

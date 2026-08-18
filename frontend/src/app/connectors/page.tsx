@@ -12,11 +12,12 @@ function ConnectorsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = useAuthStore((s) => s.token);
+  const hasHydrated = useAuthStore((s) => s._hasHydrated);
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    if (!token) router.push("/login");
-  }, [token, router]);
+    if (hasHydrated && !token) router.push("/login");
+  }, [hasHydrated, token, router]);
 
   const connected = searchParams.get("connected");
   const error = searchParams.get("error");
@@ -33,7 +34,7 @@ function ConnectorsContent() {
     queryClient.invalidateQueries({ queryKey: ["connectors"] });
   };
 
-  if (!token) return null;
+  if (!hasHydrated || !token) return null;
 
   return (
     <main className="max-w-3xl mx-auto px-6 py-8 space-y-4">

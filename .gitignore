@@ -44,3 +44,5 @@ celerybeat.pid
 *.gguf
 *.pt
 *.ckpt
+*.tsbuildinfo
+
